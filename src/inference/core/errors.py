@@ -15,3 +15,11 @@ class BackendUnavailableError(BackendError):
 
 class WorkerNotReadyError(InferenceError):
     """The worker is not in a state where it can accept requests."""
+
+
+class WorkerUnreachableError(InferenceError):
+    """A worker could not be contacted (connection failure or timeout)."""
+
+
+class NoAvailableWorkerError(InferenceError):
+    """No healthy worker could serve the request."""

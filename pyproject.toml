@@ -7,7 +7,12 @@ authors = [
     { name = "ramgovind-reizend", email = "ram.govind@reizend.ai" }
 ]
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "fastapi>=0.162.0",
+    "pydantic>=2.14.3",
+    "pydantic-settings>=2.16.2",
+    "uvicorn>=0.54.0",
+]
 
 [project.scripts]
 inference = "inference:main"
@@ -15,3 +20,16 @@ inference = "inference:main"
 [build-system]
 requires = ["uv_build>=0.13.7,<0.14.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "fastapi>=0.162.0",
+    "httpx>=0.28.1",
+    "mypy>=2.4.1",
+    "pydantic>=2.14.3",
+    "pydantic-settings>=2.16.2",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1.post1",
+    "ruff>=0.17.4",
+    "uvicorn>=0.54.0",
+]
