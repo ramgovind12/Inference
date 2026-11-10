@@ -23,3 +23,11 @@ class WorkerUnreachableError(InferenceError):
 
 class NoAvailableWorkerError(InferenceError):
     """No healthy worker could serve the request."""
+
+
+class QueueFullError(InferenceError):
+    """The request queue is at capacity; the caller should back off."""
+
+
+class QueueClosedError(InferenceError):
+    """The request queue is closed (and, for `get`, fully drained)."""
