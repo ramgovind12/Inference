@@ -31,3 +31,7 @@ class QueueFullError(InferenceError):
 
 class QueueClosedError(InferenceError):
     """The request queue is closed (and, for `get`, fully drained)."""
+
+
+class SchedulerStoppedError(InferenceError):
+    """The scheduler stopped before it could finish the request."""
