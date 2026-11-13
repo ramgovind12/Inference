@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.162.0",
+    "httpx>=0.28.1",
     "pydantic>=2.14.3",
     "pydantic-settings>=2.16.2",
     "uvicorn>=0.54.0",
@@ -33,3 +34,5 @@ dev = [
     "ruff>=0.17.4",
     "uvicorn>=0.54.0",
 ]
+
+asyncio_default_fixture_loop_scope = "function"
