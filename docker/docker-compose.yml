@@ -1,0 +1,46 @@
+x-image: &image
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+  image: inference:dev
+
+# The slim Python image has no curl. urlopen raises on a 503, so the check
+# fails correctly when /ready reports "not ready".
+x-worker: &worker
+  <<: *image
+  command: ["inference", "worker", "--host", "0.0.0.0", "--port", "8000"]
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
+    interval: 5s
+    timeout: 3s
+    retries: 5
+  stop_grace_period: 40s
+
+services:
+  worker-a:
+    <<: *worker
+  worker-b:
+    <<: *worker
+
+  gateway:
+    <<: *image
+    ports:
+      - "8000:8000"
+    environment:
+      # Development key. Override with: GATEWAY_API_KEY=... docker compose up
+      INFERENCE_GATEWAY_API_KEYS: '["${GATEWAY_API_KEY:-dev-key}"]'
+      INFERENCE_ROUTER_WORKERS: >-
+        [{"id":"worker-a","base_url":"http://worker-a:8000","models":["mock-model"]},
+         {"id":"worker-b","base_url":"http://worker-b:8000","models":["mock-model"]}]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      worker-a:
+        condition: service_healthy
+      worker-b:
+        condition: service_healthy
+    # Longer than the scheduler shutdown timeout (30 s by default).
+    stop_grace_period: 45s

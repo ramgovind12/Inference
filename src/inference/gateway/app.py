@@ -3,6 +3,8 @@
 import asyncio
 import logging
 import math
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, Request, Response
@@ -29,8 +31,15 @@ class GatewayTimeoutError(Exception):
     """No result arrived within the request timeout."""
 
 
-def create_app(queue: RequestQueue, settings: GatewaySettings | None = None) -> FastAPI:
-    """Build the gateway app. The queue is injected by the caller."""
+def create_app(
+    queue: RequestQueue,
+    settings: GatewaySettings | None = None,
+    lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]] | None = None,
+) -> FastAPI:
+    """Build the gateway app. The queue is injected by the caller.
+
+    `lifespan` lets the caller start and stop the components behind the queue.
+    """
     settings = settings or GatewaySettings()
     if settings.auth_enabled and not settings.api_keys:
         raise ValueError("authentication is enabled but no API keys are configured")
@@ -38,7 +47,7 @@ def create_app(queue: RequestQueue, settings: GatewaySettings | None = None) -> 
     authenticator = ApiKeyAuthenticator(k.get_secret_value() for k in settings.api_keys)
     limiter = TokenBucketLimiter(settings.rate_limit_rps, settings.rate_limit_burst)
 
-    app = FastAPI(title="InferScale Gateway")
+    app = FastAPI(title="InferScale Gateway", lifespan=lifespan)
     app.state.queue = queue
 
     async def authenticate(
