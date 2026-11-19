@@ -1,0 +1,11 @@
+# Adds Prometheus to the base stack:
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.observability.yml up --build
+services:
+  prometheus:
+    image: prom/prometheus:v3.0.0 # pin a version you have checked
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - gateway

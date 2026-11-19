@@ -6,8 +6,11 @@ import time
 from functools import partial
 from typing import Protocol
 
+from prometheus_client import CollectorRegistry
+
 from inference.core.errors import QueueClosedError, SchedulerStoppedError
 from inference.core.schemas import InferenceRequest, InferenceResponse
+from inference.observability.metrics import SchedulerMetrics
 from inference.queue.base import QueuedRequest, RequestQueue
 
 logger = logging.getLogger(__name__)
@@ -35,16 +38,23 @@ class Scheduler:
         router: RequestRouter,
         max_concurrency: int = 8,
         shutdown_timeout_s: float = 30.0,
+        metrics: SchedulerMetrics | None = None,
     ) -> None:
         if max_concurrency < 1:
             raise ValueError("max_concurrency must be at least 1")
         self._queue = queue
         self._router = router
         self._shutdown_timeout_s = shutdown_timeout_s
+        self._metrics = metrics or SchedulerMetrics(CollectorRegistry())
         self._slots = asyncio.Semaphore(max_concurrency)
         self._inflight: dict[asyncio.Task[None], QueuedRequest] = {}
         self._loop_task: asyncio.Task[None] | None = None
         self._stopped = False
+
+    @property
+    def in_flight(self) -> int:
+        """Number of requests being routed right now."""
+        return len(self._inflight)
 
     async def start(self) -> None:
         """Start the dispatch loop."""
@@ -123,12 +133,11 @@ class Scheduler:
 
     async def _dispatch(self, item: QueuedRequest) -> None:
         request_id = item.request.request_id
+        queue_wait_s = time.monotonic() - item.enqueued_at
+        self._metrics.queue_wait.observe(queue_wait_s)
         logger.info(
             "dispatching request",
-            extra={
-                "request_id": request_id,
-                "queue_wait_s": time.monotonic() - item.enqueued_at,
-            },
+            extra={"request_id": request_id, "queue_wait_s": queue_wait_s},
         )
         try:
             response = await self._router.route(item.request)

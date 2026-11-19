@@ -3,15 +3,19 @@
 import asyncio
 import contextlib
 import logging
+import time
 
 import httpx
+from prometheus_client import CollectorRegistry
 
 from inference.core.errors import (
+    BackendError,
     NoAvailableWorkerError,
     WorkerNotReadyError,
     WorkerUnreachableError,
 )
 from inference.core.schemas import InferenceRequest, InferenceResponse
+from inference.observability.metrics import RouterMetrics
 from inference.router.client import HttpWorkerClient, WorkerClient
 from inference.router.policies import RoutingPolicy, build_policy
 from inference.router.registry import WorkerRegistry
@@ -34,13 +38,20 @@ class Router:
         policy: RoutingPolicy,
         max_attempts: int = 3,
         health_interval_s: float = 5.0,
+        metrics: RouterMetrics | None = None,
     ) -> None:
         self._registry = registry
         self._client = client
         self._policy = policy
         self._max_attempts = max_attempts
         self._health_interval_s = health_interval_s
+        self._metrics = metrics or RouterMetrics(CollectorRegistry())
         self._health_task: asyncio.Task[None] | None = None
+
+    @property
+    def registry(self) -> WorkerRegistry:
+        """The worker registry. Read-only access for metrics wiring."""
+        return self._registry
 
     async def route(self, request: InferenceRequest) -> InferenceResponse:
         """Send `request` to a worker. Raises NoAvailableWorkerError or BackendError."""
@@ -58,11 +69,13 @@ class Router:
             worker_id = worker.endpoint.id
             tried.add(worker_id)
             worker.in_flight += 1
+            started = time.monotonic()
             try:
-                return await self._client.infer(worker.endpoint, request)
+                response = await self._client.infer(worker.endpoint, request)
             except (WorkerUnreachableError, WorkerNotReadyError) as exc:
                 last_error = exc
                 self._registry.set_healthy(worker_id, False)
+                self._metrics.record_failover(worker_id)
                 logger.warning(
                     "worker failed, marked unhealthy",
                     extra={
@@ -71,9 +84,18 @@ class Router:
                         "error": str(exc),
                     },
                 )
+            except BackendError:
+                self._metrics.record(
+                    worker_id, "backend_error", time.monotonic() - started
+                )
+                raise
+            else:
+                self._metrics.record(worker_id, "ok", time.monotonic() - started)
+                return response
             finally:
                 worker.in_flight -= 1
 
+        self._metrics.no_worker.inc()
         if not tried:
             message = f"no healthy worker serves model {request.model!r}"
         else:
@@ -117,7 +139,11 @@ class Router:
             await asyncio.sleep(self._health_interval_s)
 
 
-def create_router(settings: RouterSettings, http: httpx.AsyncClient) -> Router:
+def create_router(
+    settings: RouterSettings,
+    http: httpx.AsyncClient,
+    metrics: RouterMetrics | None = None,
+) -> Router:
     """Build a Router from settings and a shared httpx client."""
     return Router(
         registry=WorkerRegistry(settings.workers),
@@ -125,4 +151,5 @@ def create_router(settings: RouterSettings, http: httpx.AsyncClient) -> Router:
         policy=build_policy(settings.policy),
         max_attempts=settings.max_attempts,
         health_interval_s=settings.health_interval_s,
+        metrics=metrics,
     )

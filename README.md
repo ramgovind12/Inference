@@ -76,6 +76,32 @@ All settings are environment variables.
 | `INFERENCE_ROUTER_MAX_ATTEMPTS` | `3` | Workers tried before giving up |
 | `INFERENCE_WORKER_DRAIN_TIMEOUT_S` | `30` | Time a worker waits for requests in flight on shutdown |
 | `INFERENCE_WORKER_MOCK_LATENCY_S` | `0` | Delay added by the mock backend |
+| `INFERENCE_METRICS_ENABLED` | `true` | Serve Prometheus metrics at `/metrics` (control plane and workers) |
+
+## Metrics
+
+The control plane and every worker serve Prometheus metrics at `GET /metrics`.
+The route needs no API key, so keep it off public ports or set
+`INFERENCE_METRICS_ENABLED=false`.
+
+```powershell
+curl.exe http://127.0.0.1:8000/metrics   # control plane
+curl.exe http://127.0.0.1:8001/metrics   # worker
+```
+
+Main metrics (prefix `inferscale_`): `gateway_requests_total{status}`,
+`gateway_request_duration_seconds`, `gateway_errors_total{error}`, `queue_depth`,
+`scheduler_queue_wait_seconds`, `scheduler_in_flight`, `router_requests_total`,
+`router_worker_healthy`, `worker_requests_total`, `worker_tokens_total`.
+Labels never come from client input. See `docs/adr/0004-prometheus-metrics.md`.
+
+To run Prometheus next to the stack:
+
+```powershell
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.observability.yml up --build
+```
+
+Then open http://localhost:9090/targets.
 
 ## Development
 

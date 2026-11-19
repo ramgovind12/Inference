@@ -7,12 +7,16 @@ from contextlib import asynccontextmanager
 import httpx
 import uvicorn
 from fastapi import FastAPI
+from prometheus_client import CollectorRegistry
 
 from inference.core.logging import configure_logging
 from inference.gateway.app import create_app as create_gateway_app
 from inference.gateway.settings import GatewaySettings
+from inference.observability.metrics import RouterMetrics, SchedulerMetrics
+from inference.observability.settings import ObservabilitySettings
 from inference.queue.memory import InMemoryRequestQueue
 from inference.queue.settings import QueueSettings
+from inference.router.registry import WorkerState
 from inference.router.router import create_router
 from inference.router.settings import RouterSettings
 from inference.scheduler.scheduler import Scheduler
@@ -20,18 +24,37 @@ from inference.scheduler.settings import SchedulerSettings
 from inference.worker.app import create_app as create_worker_app
 
 
+def _bind_worker_gauges(metrics: RouterMetrics, worker: WorkerState) -> None:
+    """Expose one worker's health and in-flight count at scrape time."""
+    metrics.bind_worker(
+        worker.endpoint.id,
+        healthy=lambda: worker.healthy,
+        in_flight=lambda: worker.in_flight,
+    )
+
+
 def create_control_plane_app() -> FastAPI:
     """Wire gateway, queue, scheduler and router into one app."""
+    registry = CollectorRegistry()
+    observability = ObservabilitySettings()
+    scheduler_metrics = SchedulerMetrics(registry)
+    router_metrics = RouterMetrics(registry)
+
     queue = InMemoryRequestQueue(QueueSettings().max_size)
     http = httpx.AsyncClient()
-    router = create_router(RouterSettings(), http)
+    router = create_router(RouterSettings(), http, metrics=router_metrics)
     scheduler_settings = SchedulerSettings()
     scheduler = Scheduler(
         queue,
         router,
         max_concurrency=scheduler_settings.max_concurrency,
         shutdown_timeout_s=scheduler_settings.shutdown_timeout_s,
+        metrics=scheduler_metrics,
     )
+
+    scheduler_metrics.bind_state(queue.qsize, lambda: scheduler.in_flight)
+    for worker in router.registry.all():
+        _bind_worker_gauges(router_metrics, worker)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -44,7 +67,12 @@ def create_control_plane_app() -> FastAPI:
             await router.stop()
             await http.aclose()
 
-    return create_gateway_app(queue, GatewaySettings(), lifespan=lifespan)
+    return create_gateway_app(
+        queue,
+        GatewaySettings(),
+        lifespan=lifespan,
+        metrics_registry=registry if observability.metrics_enabled else None,
+    )
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -3,12 +3,15 @@
 import asyncio
 import logging
 import math
+import time
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, Request, Response
 from fastapi.responses import JSONResponse
+from prometheus_client import CollectorRegistry
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from inference.core.errors import (
     BackendError,
@@ -22,6 +25,11 @@ from inference.gateway.auth import ApiKeyAuthenticator, AuthenticationError
 from inference.gateway.rate_limit import RateLimitExceededError, TokenBucketLimiter
 from inference.gateway.schemas import GatewayInferenceRequest
 from inference.gateway.settings import GatewaySettings
+from inference.observability.metrics import (
+    METRICS_CONTENT_TYPE,
+    GatewayMetrics,
+    render,
+)
 from inference.queue.base import RequestQueue
 
 logger = logging.getLogger(__name__)
@@ -31,14 +39,47 @@ class GatewayTimeoutError(Exception):
     """No result arrived within the request timeout."""
 
 
+class _MeasureInference:
+    """Pure ASGI middleware: counts and times requests to the inference route.
+
+    It is not `BaseHTTPMiddleware`, which runs the app in a separate task and adds
+    latency. The path is compared here and is never used as a metric label.
+    """
+
+    def __init__(self, app: ASGIApp, metrics: GatewayMetrics) -> None:
+        self._app = app
+        self._metrics = metrics
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["path"] != "/v1/inference":
+            await self._app(scope, receive, send)
+            return
+        started = time.monotonic()
+        status = 500  # stays 500 if an unhandled exception ends the request
+
+        async def send_wrapper(message: Message) -> None:
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+            await send(message)
+
+        try:
+            await self._app(scope, receive, send_wrapper)
+        finally:
+            self._metrics.requests.labels(status=str(status)).inc()
+            self._metrics.duration.observe(time.monotonic() - started)
+
+
 def create_app(
     queue: RequestQueue,
     settings: GatewaySettings | None = None,
     lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]] | None = None,
+    metrics_registry: CollectorRegistry | None = None,
 ) -> FastAPI:
     """Build the gateway app. The queue is injected by the caller.
 
     `lifespan` lets the caller start and stop the components behind the queue.
+    With `metrics_registry`, the gateway records into it and serves `/metrics`.
     """
     settings = settings or GatewaySettings()
     if settings.auth_enabled and not settings.api_keys:
@@ -47,8 +88,12 @@ def create_app(
     authenticator = ApiKeyAuthenticator(k.get_secret_value() for k in settings.api_keys)
     limiter = TokenBucketLimiter(settings.rate_limit_rps, settings.rate_limit_burst)
 
+    metrics = GatewayMetrics(metrics_registry or CollectorRegistry())
+
     app = FastAPI(title="InferScale Gateway", lifespan=lifespan)
     app.state.queue = queue
+
+    app.add_middleware(_MeasureInference, metrics=metrics)
 
     async def authenticate(
         request: Request,
@@ -70,6 +115,13 @@ def create_app(
     async def health() -> dict[str, str]:
         """Liveness: the process is up."""
         return {"status": "ok"}
+
+    if metrics_registry is not None:
+
+        @app.get("/metrics", include_in_schema=False)
+        async def metrics_endpoint() -> Response:
+            """Prometheus metrics. Async, so gauges read state on the event loop."""
+            return Response(render(metrics_registry), media_type=METRICS_CONTENT_TYPE)
 
     @app.post("/v1/inference", response_model=InferenceResponse)
     async def inference(
@@ -103,6 +155,7 @@ def create_app(
         detail: str,
         headers: dict[str, str] | None = None,
     ) -> JSONResponse:
+        metrics.errors.labels(error=error).inc()
         body = ErrorResponse(error=error, detail=detail)
         return JSONResponse(
             status_code=status_code, content=body.model_dump(), headers=headers

@@ -66,6 +66,35 @@ async def test_control_plane_serves_health_and_stops_cleanly(control_plane_env):
 
 
 @pytest.mark.asyncio
+async def test_control_plane_serves_metrics(control_plane_env):
+    app = create_control_plane_app()
+
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://gw") as c:
+            response = await c.get("/metrics")
+
+    assert response.status_code == 200
+    assert "inferscale_queue_depth 0.0" in response.text
+    assert 'inferscale_router_worker_healthy{worker_id="w"} 1.0' in response.text
+
+
+@pytest.mark.asyncio
+async def test_control_plane_metrics_can_be_disabled(
+    control_plane_env, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("INFERENCE_METRICS_ENABLED", "false")
+    app = create_control_plane_app()
+
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://gw") as c:
+            response = await c.get("/metrics")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_control_plane_requires_authentication(control_plane_env):
     app = create_control_plane_app()
 
