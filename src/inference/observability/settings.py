@@ -7,4 +7,3 @@ class ObservabilitySettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="INFERENCE_")
 
     metrics_enabled: bool = True
-z

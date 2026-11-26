@@ -77,6 +77,11 @@ All settings are environment variables.
 | `INFERENCE_WORKER_DRAIN_TIMEOUT_S` | `30` | Time a worker waits for requests in flight on shutdown |
 | `INFERENCE_WORKER_MOCK_LATENCY_S` | `0` | Delay added by the mock backend |
 | `INFERENCE_METRICS_ENABLED` | `true` | Serve Prometheus metrics at `/metrics` (control plane and workers) |
+| `INFERENCE_WORKER_BACKEND` | `mock` | `mock` or `vllm` |
+| `INFERENCE_WORKER_VLLM_BASE_URL` | `http://127.0.0.1:8000` | vLLM server URL |
+| `INFERENCE_WORKER_VLLM_API_KEY` | none | Key sent to vLLM as a Bearer token |
+| `INFERENCE_WORKER_VLLM_TIMEOUT_S` | `120` | Time allowed for one generation |
+| `INFERENCE_WORKER_VLLM_CONNECT_TIMEOUT_S` | `5` | Time allowed to open the connection |
 
 ## Metrics
 
@@ -102,6 +107,28 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.observabili
 ```
 
 Then open http://localhost:9090/targets.
+
+## Run with vLLM
+
+vLLM runs as its own server. Start it first (Linux, WSL2 or a GPU container), then
+point a worker at it. The `model` clients send is forwarded as is, so it must equal
+the model vLLM serves, and the Router config must list it.
+
+```powershell
+uv run python scripts/vllm_check.py --url http://127.0.0.1:8100 --model <model-name>
+
+$env:INFERENCE_WORKER_BACKEND = "vllm"
+$env:INFERENCE_WORKER_VLLM_BASE_URL = "http://127.0.0.1:8100"
+uv run inference worker --port 8001
+```
+
+Use `"models":["<model-name>"]` in `INFERENCE_ROUTER_WORKERS`. Raise
+`INFERENCE_SCHEDULER_MAX_CONCURRENCY` so vLLM can batch. Keep timeouts in this order:
+`INFERENCE_WORKER_VLLM_TIMEOUT_S` < `INFERENCE_ROUTER_REQUEST_TIMEOUT_S` <
+`INFERENCE_GATEWAY_REQUEST_TIMEOUT_S`. Only these `parameters` reach vLLM:
+`temperature`, `top_p`, `top_k`, `stop`, `seed`, `presence_penalty`,
+`frequency_penalty`. Others are dropped with a warning. See
+`docs/adr/0005-vllm-over-http.md`. `docker/docker-compose.vllm.yml` is an untested draft.
 
 ## Development
 

@@ -1,0 +1,32 @@
+# UNTESTED draft. Needs Docker with NVIDIA GPU support.
+#   $env:VLLM_IMAGE = "vllm/vllm-openai:<pinned tag>"; $env:VLLM_MODEL = "<model>"
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.vllm.yml up --build
+x-vllm-worker: &vllm-worker
+  environment:
+    INFERENCE_WORKER_BACKEND: vllm
+    INFERENCE_WORKER_VLLM_BASE_URL: http://vllm:8000
+  healthcheck:
+    start_period: 10m # the model can take minutes to load
+  depends_on:
+    - vllm
+
+services:
+  vllm:
+    image: ${VLLM_IMAGE:?set VLLM_IMAGE to a pinned vllm/vllm-openai tag}
+    command: ["--model", "${VLLM_MODEL:?set VLLM_MODEL}"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+  worker-a:
+    <<: *vllm-worker
+  worker-b:
+    <<: *vllm-worker
+  gateway:
+    environment:
+      INFERENCE_ROUTER_WORKERS: >-
+        [{"id":"worker-a","base_url":"http://worker-a:8000","models":["${VLLM_MODEL}"]},
+         {"id":"worker-b","base_url":"http://worker-b:8000","models":["${VLLM_MODEL}"]}]

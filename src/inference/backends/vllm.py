@@ -25,6 +25,7 @@ ALLOWED_PARAMETERS = frozenset(
 # The request never reached vLLM, so it is safe for the Router to retry it elsewhere.
 _NEVER_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
 
+
 class VllmBackend:
     """Backend that sends prompts to a vLLM server (`POST /v1/completions`)."""
 

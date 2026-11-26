@@ -8,7 +8,6 @@ from fastapi.responses import JSONResponse
 from prometheus_client import CollectorRegistry
 
 from inference.backends.base import Backend
-from inference.backends.mock import MockBackend
 from inference.core.errors import (
     BackendError,
     BackendUnavailableError,
@@ -22,6 +21,7 @@ from inference.observability.metrics import (
 )
 from inference.observability.settings import ObservabilitySettings
 from inference.worker import health
+from inference.worker.factory import build_backend
 from inference.worker.service import WorkerService, WorkerState
 from inference.worker.settings import WorkerSettings
 
@@ -34,7 +34,7 @@ def create_app(
     """Build the worker app. Defaults to a MockBackend."""
     settings = settings or WorkerSettings()
     observability = observability or ObservabilitySettings()
-    backend = backend or MockBackend(latency_s=settings.mock_latency_s)
+    backend = backend or build_backend(settings)
     registry = CollectorRegistry()
     metrics = WorkerMetrics(registry)
     service = WorkerService(
